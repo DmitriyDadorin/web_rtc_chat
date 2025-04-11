@@ -15,7 +15,7 @@
 <body>
   <h2>📺 WebRTC экран через QR</h2>
 
-  <button onclick="initOffer()">1. Создать соединение (Offer + QR)</button>
+  <button onclick="startScreenShare()">1. Поделиться экраном (QR)</button>
   <div id="qr"></div>
 
   <button onclick="startScan()">2. Присоединиться (Сканировать QR)</button>
@@ -36,33 +36,26 @@
       return JSON.parse(LZString.decompressFromEncodedURIComponent(str));
     }
 
-    async function initOffer() {
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
+    async function startScreenShare() {
+      try {
+        const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+        stream.getTracks().forEach(track => pc.addTrack(track, stream));
 
-      pc.onicecandidate = async (e) => {
-        if (e.candidate) return;
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
 
-        const payload = compress({ sdp: pc.localDescription });
-        qrEl.innerHTML = '';
-        QRCode.toCanvas(document.createElement('canvas'), payload, (err, canvas) => {
-          if (err) return console.error(err);
-          qrEl.appendChild(canvas);
-        });
-      };
-
-      // после подключения
-      pc.onconnectionstatechange = async () => {
-        if (pc.connectionState === "connected") {
-          try {
-            const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
-            stream.getTracks().forEach(track => pc.addTrack(track, stream));
-            console.log("Экран транслируется.");
-          } catch (err) {
-            console.error("Ошибка доступа к экрану", err);
-          }
-        }
-      };
+        pc.onicecandidate = (e) => {
+          if (e.candidate) return;
+          const payload = compress({ sdp: pc.localDescription });
+          qrEl.innerHTML = '';
+          QRCode.toCanvas(document.createElement('canvas'), payload, (err, canvas) => {
+            if (err) return console.error(err);
+            qrEl.appendChild(canvas);
+          });
+        };
+      } catch (err) {
+        alert("Ошибка доступа к экрану: " + err.message);
+      }
     }
 
     async function startScan() {
