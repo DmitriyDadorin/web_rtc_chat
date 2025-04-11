@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <title>WebRTC QR Чат</title>
+  <script src="https://cdn.jsdelivr.net/npm/lz-string@1.4.4/libs/lz-string.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qrcode/build/qrcode.min.js"></script>
+  <script src="https://unpkg.com/html5-qrcode"></script>
+  <style>
+    body { font-family: sans-serif; margin: 1rem; }
+    textarea, input { width: 100%; box-sizing: border-box; }
+    textarea { height: 150px; margin-top: 1rem; }
+    #qr, #scan { margin-top: 1rem; }
+    #chatInput { margin-top: 10px; }
+    button { margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <h2>WebRTC QR Чат</h2>
+
+  <button onclick="createOffer()">1. Создать Offer и QR</button>
+  <div id="qr"></div>
+
+  <button onclick="startScan()">2. Сканировать Offer/Answer</button>
+  <div id="scan" style="width: 300px;"></div>
+
+  <textarea id="log" readonly placeholder="История чата..."></textarea>
+
+  <input type="text" id="chatInput" placeholder="Введите сообщение..." />
+  <button onclick="sendMessage()">Отправить</button>
+
+  <script>
+    let pc = new RTCPeerConnection();
+    let dataChannel;
+    const qrEl = document.getElementById('qr');
+    const log = document.getElementById('log');
+    const input = document.getElementById('chatInput');
+
+    function logMsg(msg) {
+      log.value += msg + '\n';
+      log.scrollTop = log.scrollHeight;
+    }
+
+    function compress(data) {
+      return LZString.compressToEncodedURIComponent(JSON.stringify(data));
+    }
+
+    function decompress(str) {
+      return JSON.parse(LZString.decompressFromEncodedURIComponent(str));
+    }
+
+    async function createOffer() {
+      dataChannel = pc.createDataChannel('chat');
+      setupChannel();
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+
+      pc.onicecandidate = (e) => {
+        if (e.candidate) return;
+        const payload = compress({ sdp: pc.localDescription });
+        qrEl.innerHTML = '';
+        QRCode.toCanvas(document.createElement('canvas'), payload, (err, canvas) => {
+          if (err) return console.error(err);
+          qrEl.appendChild(canvas);
+          logMsg('[offer] QR сгенерирован');
+        });
+      };
+    }
+
+    async function startScan() {
+      const qrScanner = new Html5Qrcode('scan');
+      qrScanner.start(
+        { facingMode: 'environment' },
+        { fps: 10, qrbox: 250 },
+        async (text) => {
+          logMsg('[scan] Получено: ' + text.slice(0, 50) + '...');
+          const { sdp } = decompress(text);
+          await qrScanner.stop();
+          document.getElementById('scan').innerHTML = '';
+
+          if (sdp.type === 'offer') {
+            pc.ondatachannel = (e) => {
+              dataChannel = e.channel;
+              setupChannel();
+            };
+            await pc.setRemoteDescription(sdp);
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+
+            pc.onicecandidate = (e) => {
+              if (e.candidate) return;
+              const answerPayload = compress({ sdp: pc.localDescription });
+              qrEl.innerHTML = '';
+              QRCode.toCanvas(document.createElement('canvas'), answerPayload, (err, canvas) => {
+                if (err) return console.error(err);
+                qrEl.appendChild(canvas);
+                logMsg('[answer] QR сгенерирован');
+              });
+            };
+          } else if (sdp.type === 'answer') {
+            await pc.setRemoteDescription(sdp);
+            logMsg('[success] Соединение установлено');
+          }
+        }
+      );
+    }
+
+    function setupChannel() {
+      dataChannel.onopen = () => logMsg('[open] Канал открыт');
+      dataChannel.onmessage = (e) => logMsg('[другой]: ' + e.data);
+    }
+
+    function sendMessage() {
+      const message = input.value.trim();
+      if (message && dataChannel && dataChannel.readyState === 'open') {
+        dataChannel.send(message);
+        logMsg('[вы]: ' + message);
+        input.value = '';
+      }
+    }
+  </script>
+</body>
+</html>
