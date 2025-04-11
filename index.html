@@ -2,44 +2,32 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8" />
-  <title>WebRTC QR Чат</title>
+  <title>WebRTC Screen Share via QR</title>
   <script src="https://cdn.jsdelivr.net/npm/lz-string@1.4.4/libs/lz-string.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/qrcode/build/qrcode.min.js"></script>
   <script src="https://unpkg.com/html5-qrcode"></script>
   <style>
     body { font-family: sans-serif; margin: 1rem; }
-    textarea, input { width: 100%; box-sizing: border-box; }
-    textarea { height: 150px; margin-top: 1rem; }
-    #qr, #scan { margin-top: 1rem; }
-    #chatInput { margin-top: 10px; }
-    button { margin-top: 10px; }
+    button { margin: 10px 0; }
+    video { width: 100%; max-height: 300px; margin-top: 10px; background: black; }
+    #qr, #scan { margin-top: 10px; }
   </style>
 </head>
 <body>
-  <h2>WebRTC QR Чат</h2>
+  <h2>📺 WebRTC трансляция экрана через QR</h2>
 
-  <button onclick="createOffer()">1. Создать Offer и QR</button>
+  <button onclick="startScreenShare()">1. Поделиться экраном (Создать Offer + QR)</button>
   <div id="qr"></div>
 
-  <button onclick="startScan()">2. Сканировать Offer/Answer</button>
+  <button onclick="startScan()">2. Присоединиться (Сканировать QR)</button>
   <div id="scan" style="width: 300px;"></div>
 
-  <textarea id="log" readonly placeholder="История чата..."></textarea>
-
-  <input type="text" id="chatInput" placeholder="Введите сообщение..." />
-  <button onclick="sendMessage()">Отправить</button>
+  <video id="remoteVideo" autoplay playsinline></video>
 
   <script>
     let pc = new RTCPeerConnection();
-    let dataChannel;
     const qrEl = document.getElementById('qr');
-    const log = document.getElementById('log');
-    const input = document.getElementById('chatInput');
-
-    function logMsg(msg) {
-      log.value += msg + '\n';
-      log.scrollTop = log.scrollHeight;
-    }
+    const videoEl = document.getElementById('remoteVideo');
 
     function compress(data) {
       return LZString.compressToEncodedURIComponent(JSON.stringify(data));
@@ -49,9 +37,9 @@
       return JSON.parse(LZString.decompressFromEncodedURIComponent(str));
     }
 
-    async function createOffer() {
-      dataChannel = pc.createDataChannel('chat');
-      setupChannel();
+    async function startScreenShare() {
+      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+      stream.getTracks().forEach(track => pc.addTrack(track, stream));
 
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
@@ -63,7 +51,6 @@
         QRCode.toCanvas(document.createElement('canvas'), payload, (err, canvas) => {
           if (err) return console.error(err);
           qrEl.appendChild(canvas);
-          logMsg('[offer] QR сгенерирован');
         });
       };
     }
@@ -74,15 +61,13 @@
         { facingMode: 'environment' },
         { fps: 10, qrbox: 250 },
         async (text) => {
-          logMsg('[scan] Получено: ' + text.slice(0, 50) + '...');
           const { sdp } = decompress(text);
           await qrScanner.stop();
           document.getElementById('scan').innerHTML = '';
 
           if (sdp.type === 'offer') {
-            pc.ondatachannel = (e) => {
-              dataChannel = e.channel;
-              setupChannel();
+            pc.ontrack = (e) => {
+              videoEl.srcObject = e.streams[0];
             };
             await pc.setRemoteDescription(sdp);
             const answer = await pc.createAnswer();
@@ -95,29 +80,13 @@
               QRCode.toCanvas(document.createElement('canvas'), answerPayload, (err, canvas) => {
                 if (err) return console.error(err);
                 qrEl.appendChild(canvas);
-                logMsg('[answer] QR сгенерирован');
               });
             };
           } else if (sdp.type === 'answer') {
             await pc.setRemoteDescription(sdp);
-            logMsg('[success] Соединение установлено');
           }
         }
       );
-    }
-
-    function setupChannel() {
-      dataChannel.onopen = () => logMsg('[open] Канал открыт');
-      dataChannel.onmessage = (e) => logMsg('[другой]: ' + e.data);
-    }
-
-    function sendMessage() {
-      const message = input.value.trim();
-      if (message && dataChannel && dataChannel.readyState === 'open') {
-        dataChannel.send(message);
-        logMsg('[вы]: ' + message);
-        input.value = '';
-      }
     }
   </script>
 </body>
