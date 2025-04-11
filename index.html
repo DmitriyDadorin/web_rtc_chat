@@ -2,31 +2,39 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8" />
-  <title>WebRTC: Экран через QR</title>
+  <title>Синхронизация экранов через WebRTC</title>
   <script src="https://cdn.jsdelivr.net/npm/lz-string@1.4.4/libs/lz-string.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/qrcode/build/qrcode.min.js"></script>
   <script src="https://unpkg.com/html5-qrcode"></script>
   <style>
     body { font-family: sans-serif; margin: 1rem; }
-    video { width: 100%; max-height: 300px; margin-top: 1rem; background: black; }
-    #qr, #scan { margin-top: 1rem; }
+    #qr, #scan, #preview { margin-top: 1rem; }
+    iframe { width: 100%; height: 300px; border: 1px solid #ccc; margin-top: 1rem; }
+    textarea { width: 100%; height: 150px; margin-top: 1rem; }
   </style>
 </head>
 <body>
-  <h2>📺 WebRTC экран через QR</h2>
+  <h2>🔄 Синхронизация HTML через QR + WebRTC</h2>
 
-  <button onclick="startScreenShare()">1. Поделиться экраном (QR)</button>
+  <button onclick="startSender()">1. Я отправляю (QR)</button>
   <div id="qr"></div>
 
-  <button onclick="startScan()">2. Присоединиться (Сканировать QR)</button>
+  <button onclick="startReceiver()">2. Я принимаю (сканирую QR)</button>
   <div id="scan" style="width: 300px;"></div>
 
-  <video id="remoteVideo" autoplay playsinline></video>
+  <textarea id="htmlInput" placeholder="Введите HTML-код для трансляции...">
+<h1>Привет 👋</h1>
+<p>Это синхронизировано по WebRTC!</p>
+  </textarea>
+
+  <iframe id="preview"></iframe>
 
   <script>
     let pc = new RTCPeerConnection();
+    let dataChannel;
+    const htmlInput = document.getElementById('htmlInput');
+    const preview = document.getElementById('preview');
     const qrEl = document.getElementById('qr');
-    const videoEl = document.getElementById('remoteVideo');
 
     function compress(data) {
       return LZString.compressToEncodedURIComponent(JSON.stringify(data));
@@ -36,29 +44,37 @@
       return JSON.parse(LZString.decompressFromEncodedURIComponent(str));
     }
 
-    async function startScreenShare() {
-      try {
-        const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
-        stream.getTracks().forEach(track => pc.addTrack(track, stream));
-
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-
-        pc.onicecandidate = (e) => {
-          if (e.candidate) return;
-          const payload = compress({ sdp: pc.localDescription });
-          qrEl.innerHTML = '';
-          QRCode.toCanvas(document.createElement('canvas'), payload, (err, canvas) => {
-            if (err) return console.error(err);
-            qrEl.appendChild(canvas);
-          });
-        };
-      } catch (err) {
-        alert("Ошибка доступа к экрану: " + err.message);
+    function sendHtml() {
+      const html = htmlInput.value;
+      preview.srcdoc = html;
+      if (dataChannel?.readyState === 'open') {
+        dataChannel.send(html);
       }
     }
 
-    async function startScan() {
+    htmlInput.addEventListener('input', () => {
+      sendHtml();
+    });
+
+    async function startSender() {
+      dataChannel = pc.createDataChannel('sync');
+      setupChannel();
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+
+      pc.onicecandidate = (e) => {
+        if (e.candidate) return;
+        const payload = compress({ sdp: pc.localDescription });
+        qrEl.innerHTML = '';
+        QRCode.toCanvas(document.createElement('canvas'), payload, (err, canvas) => {
+          if (err) return console.error(err);
+          qrEl.appendChild(canvas);
+        });
+      };
+    }
+
+    async function startReceiver() {
       const qrScanner = new Html5Qrcode('scan');
       qrScanner.start(
         { facingMode: 'environment' },
@@ -68,28 +84,34 @@
           await qrScanner.stop();
           document.getElementById('scan').innerHTML = '';
 
-          if (sdp.type === 'offer') {
-            pc.ontrack = (e) => {
-              videoEl.srcObject = e.streams[0];
-            };
-            await pc.setRemoteDescription(sdp);
-            const answer = await pc.createAnswer();
-            await pc.setLocalDescription(answer);
+          pc.ondatachannel = (e) => {
+            dataChannel = e.channel;
+            setupChannel();
+          };
 
-            pc.onicecandidate = (e) => {
-              if (e.candidate) return;
-              const answerPayload = compress({ sdp: pc.localDescription });
-              qrEl.innerHTML = '';
-              QRCode.toCanvas(document.createElement('canvas'), answerPayload, (err, canvas) => {
-                if (err) return console.error(err);
-                qrEl.appendChild(canvas);
-              });
-            };
-          } else if (sdp.type === 'answer') {
-            await pc.setRemoteDescription(sdp);
-          }
+          await pc.setRemoteDescription(sdp);
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+
+          pc.onicecandidate = (e) => {
+            if (e.candidate) return;
+            const answerPayload = compress({ sdp: pc.localDescription });
+            qrEl.innerHTML = '';
+            QRCode.toCanvas(document.createElement('canvas'), answerPayload, (err, canvas) => {
+              if (err) return console.error(err);
+              qrEl.appendChild(canvas);
+            });
+          };
         }
       );
+    }
+
+    function setupChannel() {
+      if (!dataChannel) return;
+      dataChannel.onopen = () => sendHtml();
+      dataChannel.onmessage = (e) => {
+        preview.srcdoc = e.data;
+      };
     }
   </script>
 </body>
