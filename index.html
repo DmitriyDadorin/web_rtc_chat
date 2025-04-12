@@ -2,16 +2,13 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8" />
-  <title>Сопряжение P2P через WebRTC</title>
+  <title>Сопряжение P2P через WebRTC с двухсторонним обменом QR-кодов</title>
   <!-- Tailwind CSS через CDN -->
   <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
   <!-- Библиотеки для сжатия, генерации QR и сканера QR -->
   <script src="https://cdn.jsdelivr.net/npm/lz-string@1.4.4/libs/lz-string.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/qrcode/build/qrcode.min.js"></script>
   <script src="https://unpkg.com/html5-qrcode"></script>
-  <style>
-    /* При необходимости можно добавить доп. стили */
-  </style>
 </head>
 <body class="bg-gray-100 min-h-screen">
   <!-- Экран сопряжения -->
@@ -22,9 +19,15 @@
       <button id="managerBtn" class="bg-blue-500 text-white px-4 py-2 rounded">Стать Менеджером</button>
       <button id="clientBtn" class="bg-green-500 text-white px-4 py-2 rounded">Стать Клиентом</button>
     </div>
-    <!-- Контейнер для QR-кода и сканера -->
+    <!-- Контейнер для отображения QR-кода (сгенерированного offer или answer) -->
     <div id="qrContainer" class="mb-4"></div>
-    <div id="scanContainer"></div>
+    <!-- Кнопка для сканирования QR (используется менеджером для считывания answer) -->
+    <div id="managerScanArea" class="hidden mb-4">
+      <button id="managerScanBtn" class="bg-purple-500 text-white px-4 py-2 rounded w-full">Сканировать QR-код ответа</button>
+      <div id="managerScanContainer" class="mt-4"></div>
+    </div>
+    <!-- Контейнер для сканирования (используется клиентом для считывания offer) -->
+    <div id="scanContainer" class="mb-4"></div>
   </div>
 
   <!-- Основной интерфейс (скрыт до установления соединения) -->
@@ -81,6 +84,9 @@
     const roleBadge = document.getElementById('roleBadge');
     const qrContainer = document.getElementById('qrContainer');
     const scanContainer = document.getElementById('scanContainer');
+    const managerScanArea = document.getElementById('managerScanArea');
+    const managerScanBtn = document.getElementById('managerScanBtn');
+    const managerScanContainer = document.getElementById('managerScanContainer');
     const chatMessages = document.getElementById('chatMessages');
     const chatInput = document.getElementById('chatInput');
     const sendChatBtn = document.getElementById('sendChatBtn');
@@ -121,7 +127,7 @@
         pairingUI.classList.add('hidden');
         mainUI.classList.remove('hidden');
         roleBadge.textContent = userRole;
-        // На стороне менеджера кнопка "Взять кредит" блокирована, т.к. её действие инициирует клиент
+        // Если устройство имеет роль Менеджера, блокировка кнопки "Взять кредит"
         if (userRole === "Менеджер") {
           takeCreditBtn.disabled = true;
         }
@@ -134,7 +140,6 @@
             appendChatMessage("Партнер", msg.message);
             break;
           case 'creditAccepted':
-            // Если я – менеджер, уведомляем о подтверждении кредита от клиента
             if (userRole === "Менеджер") {
               appendChatMessage("Система", "Клиент принял кредит");
             }
@@ -145,9 +150,10 @@
       };
     }
 
-    // Менеджер – отправка (создание dataChannel, создание offer и генерация QR-кода)
-    async function startSender() {
+    // Функция для менеджера: создание offer и генерация QR-кода
+    async function startManager() {
       userRole = "Менеджер";
+      // Создаем dataChannel
       dataChannel = pc.createDataChannel('sync');
       setupDataChannel();
 
@@ -158,28 +164,32 @@
         if (e.candidate) return;
         const payload = compress({ sdp: pc.localDescription });
         qrContainer.innerHTML = "";
+        // Генерация QR-кода для offer
         QRCode.toCanvas(document.createElement('canvas'), payload, (err, canvas) => {
           if (err) return console.error(err);
           qrContainer.appendChild(canvas);
         });
+        // Для менеджера теперь включаем область для сканирования ответа
+        managerScanArea.classList.remove('hidden');
       };
     }
 
-    // Клиент – приём: сканирование QR-кода, установка соединения и генерация ответа
-    async function startReceiver() {
+    // Функция для клиента: сканирование offer, создание answer и генерация QR-кода
+    async function startClient() {
       userRole = "Клиент";
       const html5QrCode = new Html5Qrcode("scanContainer");
       html5QrCode.start(
         { facingMode: "environment" },
         { fps: 10, qrbox: 250 },
         async (decodedText, decodedResult) => {
-          // Остановка сканера после успешного сканирования
+          // Остановка сканера после считывания offer
           await html5QrCode.stop();
           scanContainer.innerHTML = "";
 
           const data = decompress(decodedText);
           await pc.setRemoteDescription(data.sdp);
 
+          // При получении dataChannel на стороне клиента
           pc.ondatachannel = (event) => {
             dataChannel = event.channel;
             setupDataChannel();
@@ -192,6 +202,7 @@
             if (e.candidate) return;
             const answerPayload = compress({ sdp: pc.localDescription });
             qrContainer.innerHTML = "";
+            // Генерация QR-кода для answer
             QRCode.toCanvas(document.createElement('canvas'), answerPayload, (err, canvas) => {
               if (err) return console.error(err);
               qrContainer.appendChild(canvas);
@@ -201,11 +212,28 @@
       );
     }
 
-    // Обработчики событий для кнопок выбора роли
-    document.getElementById('managerBtn').addEventListener('click', startSender);
-    document.getElementById('clientBtn').addEventListener('click', startReceiver);
+    // Функция для менеджера: сканирование QR-кода с answer от клиента
+    async function startManagerScan() {
+      const html5QrCode = new Html5Qrcode("managerScanContainer");
+      html5QrCode.start(
+        { facingMode: "environment" },
+        { fps: 10, qrbox: 250 },
+        async (decodedText, decodedResult) => {
+          await html5QrCode.stop();
+          managerScanContainer.innerHTML = "";
 
-    // Отправка сообщения в чат
+          const data = decompress(decodedText);
+          await pc.setRemoteDescription(data.sdp);
+        }
+      );
+    }
+
+    // Обработчики для кнопок выбора роли
+    document.getElementById('managerBtn').addEventListener('click', startManager);
+    document.getElementById('clientBtn').addEventListener('click', startClient);
+    managerScanBtn.addEventListener('click', startManagerScan);
+
+    // Чат: отправка сообщений
     sendChatBtn.addEventListener('click', () => {
       const message = chatInput.value.trim();
       if (message) {
@@ -221,15 +249,14 @@
       }
     });
 
-    // Обработчик клика по кнопке "Взять кредит"
+    // Обработчик кнопки "Взять кредит"
     takeCreditBtn.addEventListener('click', () => {
       if (userRole === "Клиент") {
-        // Показываем модальное окно подтверждения
         modal.classList.remove('hidden');
       }
     });
 
-    // Подтверждение кредита (на стороне клиента)
+    // Подтверждение кредита
     confirmCreditBtn.addEventListener('click', () => {
       sendSyncMessage({ type: "creditAccepted" });
       appendChatMessage("Система", "Вы приняли кредит");
