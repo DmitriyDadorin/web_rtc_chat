@@ -3,12 +3,20 @@
 <head>
   <meta charset="UTF-8" />
   <title>Клиент - Сопряжение P2P через WebRTC</title>
+  <!-- Мета-тег для мобильных устройств -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <!-- Tailwind CSS через CDN -->
   <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
   <!-- Библиотеки для сжатия, генерации QR и сканера QR -->
   <script src="https://cdn.jsdelivr.net/npm/lz-string@1.4.4/libs/lz-string.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/qrcode/build/qrcode.min.js"></script>
   <script src="https://unpkg.com/html5-qrcode"></script>
+  <style>
+    /* Улучшаем прокрутку на мобильных устройствах */
+    #creditContent {
+      -webkit-overflow-scrolling: touch;
+    }
+  </style>
 </head>
 <body class="bg-gray-100 min-h-screen">
   <!-- Экран сопряжения для клиента -->
