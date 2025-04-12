@@ -2,63 +2,154 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8" />
-  <title>Синхронизация экранов через WebRTC</title>
+  <title>Сопряжение P2P через WebRTC</title>
+  <!-- Tailwind CSS через CDN -->
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+  <!-- Библиотеки для сжатия, генерации QR и сканера QR -->
   <script src="https://cdn.jsdelivr.net/npm/lz-string@1.4.4/libs/lz-string.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/qrcode/build/qrcode.min.js"></script>
   <script src="https://unpkg.com/html5-qrcode"></script>
   <style>
-    body { font-family: sans-serif; margin: 1rem; }
-    #qr, #scan, #preview { margin-top: 1rem; }
-    iframe { width: 100%; height: 300px; border: 1px solid #ccc; margin-top: 1rem; }
-    textarea { width: 100%; height: 150px; margin-top: 1rem; }
+    /* При необходимости можно добавить доп. стили */
   </style>
 </head>
-<body>
-  <h2>🔄 Синхронизация HTML через QR + WebRTC</h2>
+<body class="bg-gray-100 min-h-screen">
+  <!-- Экран сопряжения -->
+  <div id="pairingUI" class="max-w-md mx-auto mt-10 p-6 bg-white rounded shadow">
+    <h2 class="text-2xl font-bold mb-4">Пошаговое сопряжение</h2>
+    <p class="mb-4">Выберите свою роль:</p>
+    <div class="flex justify-between mb-4">
+      <button id="managerBtn" class="bg-blue-500 text-white px-4 py-2 rounded">Стать Менеджером</button>
+      <button id="clientBtn" class="bg-green-500 text-white px-4 py-2 rounded">Стать Клиентом</button>
+    </div>
+    <!-- Контейнер для QR-кода и сканера -->
+    <div id="qrContainer" class="mb-4"></div>
+    <div id="scanContainer"></div>
+  </div>
 
-  <button onclick="startSender()">1. Я отправляю (QR)</button>
-  <div id="qr"></div>
+  <!-- Основной интерфейс (скрыт до установления соединения) -->
+  <div id="mainUI" class="max-w-4xl mx-auto mt-8 p-6 bg-white rounded shadow hidden">
+    <div class="flex justify-between items-center">
+      <h2 class="text-2xl font-bold">Синхронизированный экран</h2>
+      <span id="roleBadge" class="px-3 py-1 bg-gray-200 rounded font-semibold"></span>
+    </div>
+    <!-- Блок с информацией о кредите -->
+    <div class="mt-6 p-4 bg-gray-50 rounded border">
+      <h3 class="text-xl font-semibold mb-4">Ознакомьтесь с информацией о кредите</h3>
+      <p class="mb-4">
+        Lorem ipsum dolor sit amet, consectetur adipiscing elit. Donec vitae orci nec massa fermentum bibendum. 
+        Vivamus eget felis nec sapien euismod ullamcorper. Phasellus at nisl ut lorem consectetur tincidunt.
+        Praesent vulputate, neque sit amet pharetra commodo, odio lacus porttitor ligula, ut convallis sem libero ut ex.
+        Nulla facilisi. Integer ac nisi eget dolor malesuada vulputate. Sed ornare nulla ac justo placerat, nec 
+        pulvinar nunc tristique. Suspendisse potenti.
+      </p>
+      <!-- Кнопка "Взять кредит" -->
+      <button id="takeCreditBtn" class="bg-blue-500 text-white px-4 py-2 rounded">Взять кредит</button>
+    </div>
+  </div>
 
-  <button onclick="startReceiver()">2. Я принимаю (сканирую QR)</button>
-  <div id="scan" style="width: 300px;"></div>
+  <!-- Модальное окно для подтверждения кредита -->
+  <div id="modal" class="fixed inset-0 flex items-center justify-center bg-black bg-opacity-50 hidden">
+    <div class="bg-white p-6 rounded shadow max-w-sm mx-auto">
+      <h3 class="text-xl font-bold mb-4">Подтвердите взятие кредита</h3>
+      <div class="flex justify-end space-x-4">
+        <button id="confirmCreditBtn" class="bg-green-500 text-white px-4 py-2 rounded">Подтвердить</button>
+        <button id="cancelCreditBtn" class="bg-red-500 text-white px-4 py-2 rounded">Отмена</button>
+      </div>
+    </div>
+  </div>
 
-  <textarea id="htmlInput" placeholder="Введите HTML-код для трансляции...">
-<h1>Привет 👋</h1>
-<p>Это синхронизировано по WebRTC!</p>
-  </textarea>
-
-  <iframe id="preview"></iframe>
+  <!-- Чат-виджет в правом нижнем углу -->
+  <div id="chatWidget" class="fixed bottom-4 right-4 bg-white p-4 shadow rounded w-64">
+    <h4 class="font-bold mb-2">Чат</h4>
+    <div id="chatMessages" class="h-40 overflow-y-auto border p-2 mb-2"></div>
+    <div class="flex">
+      <input id="chatInput" class="flex-grow border rounded-l px-2" placeholder="Введите сообщение...">
+      <button id="sendChatBtn" class="bg-blue-500 text-white px-3 rounded-r">Отправить</button>
+    </div>
+  </div>
 
   <script>
-    let pc = new RTCPeerConnection();
-    let dataChannel;
-    const htmlInput = document.getElementById('htmlInput');
-    const preview = document.getElementById('preview');
-    const qrEl = document.getElementById('qr');
+    // Глобальные переменные
+    const pc = new RTCPeerConnection();
+    let dataChannel = null;
+    let userRole = "";
 
+    // Элементы интерфейса
+    const pairingUI = document.getElementById('pairingUI');
+    const mainUI = document.getElementById('mainUI');
+    const roleBadge = document.getElementById('roleBadge');
+    const qrContainer = document.getElementById('qrContainer');
+    const scanContainer = document.getElementById('scanContainer');
+    const chatMessages = document.getElementById('chatMessages');
+    const chatInput = document.getElementById('chatInput');
+    const sendChatBtn = document.getElementById('sendChatBtn');
+    const takeCreditBtn = document.getElementById('takeCreditBtn');
+    const modal = document.getElementById('modal');
+    const confirmCreditBtn = document.getElementById('confirmCreditBtn');
+    const cancelCreditBtn = document.getElementById('cancelCreditBtn');
+
+    // Функции сжатия и распаковки данных
     function compress(data) {
       return LZString.compressToEncodedURIComponent(JSON.stringify(data));
     }
-
     function decompress(str) {
       return JSON.parse(LZString.decompressFromEncodedURIComponent(str));
     }
 
-    function sendHtml() {
-      const html = htmlInput.value;
-      preview.srcdoc = html;
-      if (dataChannel?.readyState === 'open') {
-        dataChannel.send(html);
+    // Отправка сообщений через dataChannel (формат JSON)
+    function sendSyncMessage(message) {
+      if (dataChannel && dataChannel.readyState === 'open') {
+        dataChannel.send(JSON.stringify(message));
       }
     }
 
-    htmlInput.addEventListener('input', () => {
-      sendHtml();
-    });
+    // Функция добавления сообщений в чат
+    function appendChatMessage(sender, text) {
+      const div = document.createElement('div');
+      div.className = "mb-2";
+      div.textContent = `${sender}: ${text}`;
+      chatMessages.appendChild(div);
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
 
+    // Настройка dataChannel
+    function setupDataChannel() {
+      if (!dataChannel) return;
+      dataChannel.onopen = () => {
+        // По открытию канала скрываем экран сопряжения и показываем основной интерфейс
+        pairingUI.classList.add('hidden');
+        mainUI.classList.remove('hidden');
+        roleBadge.textContent = userRole;
+        // На стороне менеджера кнопка "Взять кредит" блокирована, т.к. её действие инициирует клиент
+        if (userRole === "Менеджер") {
+          takeCreditBtn.disabled = true;
+        }
+      };
+
+      dataChannel.onmessage = (event) => {
+        let msg = JSON.parse(event.data);
+        switch (msg.type) {
+          case 'chat':
+            appendChatMessage("Партнер", msg.message);
+            break;
+          case 'creditAccepted':
+            // Если я – менеджер, уведомляем о подтверждении кредита от клиента
+            if (userRole === "Менеджер") {
+              appendChatMessage("Система", "Клиент принял кредит");
+            }
+            break;
+          default:
+            console.log("Неизвестное сообщение:", msg);
+        }
+      };
+    }
+
+    // Менеджер – отправка (создание dataChannel, создание offer и генерация QR-кода)
     async function startSender() {
+      userRole = "Менеджер";
       dataChannel = pc.createDataChannel('sync');
-      setupChannel();
+      setupDataChannel();
 
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
@@ -66,53 +157,89 @@
       pc.onicecandidate = (e) => {
         if (e.candidate) return;
         const payload = compress({ sdp: pc.localDescription });
-        qrEl.innerHTML = '';
+        qrContainer.innerHTML = "";
         QRCode.toCanvas(document.createElement('canvas'), payload, (err, canvas) => {
           if (err) return console.error(err);
-          qrEl.appendChild(canvas);
+          qrContainer.appendChild(canvas);
         });
       };
     }
 
+    // Клиент – приём: сканирование QR-кода, установка соединения и генерация ответа
     async function startReceiver() {
-      const qrScanner = new Html5Qrcode('scan');
-      qrScanner.start(
-        { facingMode: 'environment' },
+      userRole = "Клиент";
+      const html5QrCode = new Html5Qrcode("scanContainer");
+      html5QrCode.start(
+        { facingMode: "environment" },
         { fps: 10, qrbox: 250 },
-        async (text) => {
-          const { sdp } = decompress(text);
-          await qrScanner.stop();
-          document.getElementById('scan').innerHTML = '';
+        async (decodedText, decodedResult) => {
+          // Остановка сканера после успешного сканирования
+          await html5QrCode.stop();
+          scanContainer.innerHTML = "";
 
-          pc.ondatachannel = (e) => {
-            dataChannel = e.channel;
-            setupChannel();
+          const data = decompress(decodedText);
+          await pc.setRemoteDescription(data.sdp);
+
+          pc.ondatachannel = (event) => {
+            dataChannel = event.channel;
+            setupDataChannel();
           };
 
-          await pc.setRemoteDescription(sdp);
           const answer = await pc.createAnswer();
           await pc.setLocalDescription(answer);
 
           pc.onicecandidate = (e) => {
             if (e.candidate) return;
             const answerPayload = compress({ sdp: pc.localDescription });
-            qrEl.innerHTML = '';
+            qrContainer.innerHTML = "";
             QRCode.toCanvas(document.createElement('canvas'), answerPayload, (err, canvas) => {
               if (err) return console.error(err);
-              qrEl.appendChild(canvas);
+              qrContainer.appendChild(canvas);
             });
           };
         }
       );
     }
 
-    function setupChannel() {
-      if (!dataChannel) return;
-      dataChannel.onopen = () => sendHtml();
-      dataChannel.onmessage = (e) => {
-        preview.srcdoc = e.data;
-      };
-    }
+    // Обработчики событий для кнопок выбора роли
+    document.getElementById('managerBtn').addEventListener('click', startSender);
+    document.getElementById('clientBtn').addEventListener('click', startReceiver);
+
+    // Отправка сообщения в чат
+    sendChatBtn.addEventListener('click', () => {
+      const message = chatInput.value.trim();
+      if (message) {
+        appendChatMessage(userRole, message);
+        sendSyncMessage({ type: "chat", message: message });
+        chatInput.value = "";
+      }
+    });
+    chatInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        sendChatBtn.click();
+      }
+    });
+
+    // Обработчик клика по кнопке "Взять кредит"
+    takeCreditBtn.addEventListener('click', () => {
+      if (userRole === "Клиент") {
+        // Показываем модальное окно подтверждения
+        modal.classList.remove('hidden');
+      }
+    });
+
+    // Подтверждение кредита (на стороне клиента)
+    confirmCreditBtn.addEventListener('click', () => {
+      sendSyncMessage({ type: "creditAccepted" });
+      appendChatMessage("Система", "Вы приняли кредит");
+      modal.classList.add('hidden');
+      takeCreditBtn.disabled = true;
+    });
+
+    cancelCreditBtn.addEventListener('click', () => {
+      modal.classList.add('hidden');
+    });
   </script>
 </body>
 </html>
