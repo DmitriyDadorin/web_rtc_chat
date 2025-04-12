@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <title>Клиент - Сопряжение P2P через WebRTC</title>
+  <!-- Tailwind CSS через CDN -->
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+  <!-- Библиотеки для сжатия, генерации QR и сканера QR -->
+  <script src="https://cdn.jsdelivr.net/npm/lz-string@1.4.4/libs/lz-string.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qrcode/build/qrcode.min.js"></script>
+  <script src="https://unpkg.com/html5-qrcode"></script>
+</head>
+<body class="bg-gray-100 min-h-screen">
+  <!-- Экран сопряжения для клиента -->
+  <div id="pairingUI" class="max-w-md mx-auto mt-10 p-6 bg-white rounded shadow">
+    <h2 class="text-2xl font-bold mb-4">Пошаговое сопряжение (Клиент)</h2>
+    <!-- Контейнер для сканирования offer от менеджера -->
+    <div id="scanContainer" class="mb-4"></div>
+  </div>
+
+  <!-- Основной интерфейс для клиента -->
+  <div id="mainUI" class="max-w-4xl mx-auto mt-8 p-6 bg-white rounded shadow hidden">
+    <div class="flex justify-between items-center mb-4">
+      <h2 class="text-2xl font-bold">Интерфейс Клиента</h2>
+      <span class="px-3 py-1 bg-gray-200 rounded font-semibold">Клиент</span>
+    </div>
+    <!-- Блок с информацией о кредите (обёрнут в скролируемый контейнер) -->
+    <div id="creditContent" class="mt-6 p-4 bg-gray-50 rounded border overflow-auto h-64">
+      <h3 class="text-xl font-semibold mb-4">Информация о кредите</h3>
+      <p>
+        Lorem ipsum dolor sit amet, consectetur adipiscing elit. Donec vitae orci nec massa fermentum bibendum. 
+        Vivamus eget felis nec sapien euismod ullamcorper. Phasellus at nisl ut lorem consectetur tincidunt.
+        Praesent vulputate, neque sit amet pharetra commodo, odio lacus porttitor ligula, ut convallis sem libero ut ex.
+        Nulla facilisi. Integer ac nisi eget dolor malesuada vulputate. Sed ornare nulla ac justo placerat, nec 
+        pulvinar nunc tristique. Suspendisse potenti.
+      </p>
+    </div>
+    <!-- Кнопка для запуска подтверждения кредита -->
+    <button id="takeCreditBtn" class="bg-blue-500 text-white px-4 py-2 rounded mt-4">Взять кредит</button>
+    <!-- Чат‑виджет -->
+    <div id="chatWidget" class="fixed bottom-4 right-4 bg-white p-4 shadow rounded w-64">
+      <h4 class="font-bold mb-2">Чат</h4>
+      <div id="chatMessages" class="h-40 overflow-y-auto border p-2 mb-2"></div>
+      <div class="flex">
+        <input id="chatInput" class="flex-grow border rounded-l px-2" placeholder="Введите сообщение...">
+        <button id="sendChatBtn" class="bg-blue-500 text-white px-3 rounded-r">Отправить</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Модальное окно для подтверждения кредита -->
+  <div id="modal" class="fixed inset-0 flex items-center justify-center bg-black bg-opacity-50 hidden">
+    <div class="bg-white p-6 rounded shadow max-w-sm mx-auto">
+      <h3 class="text-xl font-bold mb-4">Подтвердите взятие кредита</h3>
+      <div class="flex justify-end space-x-4">
+        <button id="confirmCreditBtn" class="bg-green-500 text-white px-4 py-2 rounded">Подтвердить</button>
+        <button id="cancelCreditBtn" class="bg-red-500 text-white px-4 py-2 rounded">Отмена</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Глобальные переменные
+    const pc = new RTCPeerConnection();
+    let dataChannel = null;
+    const clientRole = "Клиент";
+
+    // Элементы интерфейса
+    const pairingUI = document.getElementById('pairingUI');
+    const mainUI = document.getElementById('mainUI');
+    const scanContainer = document.getElementById('scanContainer');
+    const chatMessages = document.getElementById('chatMessages');
+    const chatInput = document.getElementById('chatInput');
+    const sendChatBtn = document.getElementById('sendChatBtn');
+    const creditContent = document.getElementById('creditContent');
+    const takeCreditBtn = document.getElementById('takeCreditBtn');
+    const modal = document.getElementById('modal');
+    const confirmCreditBtn = document.getElementById('confirmCreditBtn');
+    const cancelCreditBtn = document.getElementById('cancelCreditBtn');
+
+    // Функции сжатия/распаковки
+    function compress(data) {
+      return LZString.compressToEncodedURIComponent(JSON.stringify(data));
+    }
+    function decompress(str) {
+      return JSON.parse(LZString.decompressFromEncodedURIComponent(str));
+    }
+
+    // Отправка сообщений через DataChannel (JSON)
+    function sendSyncMessage(message) {
+      if (dataChannel && dataChannel.readyState === 'open') {
+        dataChannel.send(JSON.stringify(message));
+      }
+    }
+
+    // Функция добавления сообщений в чат
+    function appendChatMessage(sender, text) {
+      const div = document.createElement('div');
+      div.className = "mb-2";
+      div.textContent = `${sender}: ${text}`;
+      chatMessages.appendChild(div);
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+
+    // Настройка DataChannel
+    function setupDataChannel() {
+      if (!dataChannel) return;
+      dataChannel.onopen = () => {
+        pairingUI.classList.add('hidden');
+        mainUI.classList.remove('hidden');
+      };
+
+      dataChannel.onmessage = (event) => {
+        let msg = JSON.parse(event.data);
+        switch (msg.type) {
+          case 'chat':
+            appendChatMessage("Менеджер", msg.message);
+            break;
+          case 'creditAccepted':
+            appendChatMessage("Система", "Клиент принял кредит");
+            break;
+          default:
+            console.log("Неизвестное сообщение:", msg);
+        }
+      };
+    }
+
+    // Функция для клиента: сканирование offer, создание answer и генерация QR‑кода
+    async function startClient() {
+      const html5QrCode = new Html5Qrcode("scanContainer");
+      html5QrCode.start(
+        { facingMode: "environment" },
+        { fps: 10, qrbox: 250 },
+        async (decodedText) => {
+          await html5QrCode.stop();
+          scanContainer.innerHTML = "";
+          const data = decompress(decodedText);
+          await pc.setRemoteDescription(data.sdp);
+
+          pc.ondatachannel = (event) => {
+            dataChannel = event.channel;
+            setupDataChannel();
+          };
+
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+
+          pc.onicecandidate = (e) => {
+            if (e.candidate) return;
+            const answerPayload = compress({ sdp: pc.localDescription });
+            // Вывод QR‑кода с answer для менеджера (можно оставить для визуальной отладки)
+            const qrContainerForAnswer = document.createElement('div');
+            QRCode.toCanvas(document.createElement('canvas'), answerPayload, (err, canvas) => {
+              if (err) return console.error(err);
+              qrContainerForAnswer.appendChild(canvas);
+              scanContainer.appendChild(qrContainerForAnswer);
+            });
+          };
+        }
+      );
+    }
+
+    // Обработчики для чата
+    sendChatBtn.addEventListener('click', () => {
+      const message = chatInput.value.trim();
+      if (message) {
+        appendChatMessage("Клиент", message);
+        sendSyncMessage({ type: "chat", message: message });
+        chatInput.value = "";
+      }
+    });
+    chatInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        sendChatBtn.click();
+      }
+    });
+
+    // Обработка модального окна (подтверждение кредита)
+    takeCreditBtn.addEventListener('click', () => {
+      modal.classList.remove('hidden');
+      // Отправляем событие, чтобы менеджер тоже открыл модальное окно
+      sendSyncMessage({ type: "showModal" });
+    });
+    confirmCreditBtn.addEventListener('click', () => {
+      sendSyncMessage({ type: "creditAccepted" });
+      appendChatMessage("Система", "Вы приняли кредит");
+      modal.classList.add('hidden');
+      sendSyncMessage({ type: "closeModal" });
+      takeCreditBtn.disabled = true;
+    });
+    cancelCreditBtn.addEventListener('click', () => {
+      modal.classList.add('hidden');
+      sendSyncMessage({ type: "closeModal" });
+    });
+
+    // Отслеживание событий мыши и прокрутки на клиенте
+    document.addEventListener('mousemove', (e) => {
+      sendSyncMessage({ type: "mouse", x: e.clientX, y: e.clientY });
+    });
+    creditContent.addEventListener('scroll', (e) => {
+      sendSyncMessage({ type: "scroll", scrollTop: e.target.scrollTop });
+    });
+
+    // Запуск сканирования offer сразу при загрузке страницы
+    window.addEventListener('load', startClient);
+  </script>
+</body>
+</html>
